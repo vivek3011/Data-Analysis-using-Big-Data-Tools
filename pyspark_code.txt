@@ -1,0 +1,134 @@
+# Create SparkSession from builder
+import pyspark
+from pyspark.sql import SparkSession
+from functools import reduce  # For Python 3.x
+from pyspark.sql import DataFrame
+from pyspark.sql.functions import isnan, when, count, col
+from pyspark.sql import Row
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+import pyspark.pandas as ps
+from pyspark.sql.functions import monotonically_increasing_id, row_number
+from pyspark.sql.window import Window
+
+
+def unionAll(*dfs):
+    return reduce(DataFrame.unionAll, dfs)
+
+
+from pyspark.sql.functions import monotonically_increasing_id
+def get_mode(df):
+    column_lst = df.columns
+    res = [df.select(i).groupby(i).count().orderBy("count", ascending=False) for i in column_lst]
+    df_mode = res[0].limit(1).select(column_lst[0]).withColumn("temp_name_monotonically_increasing_id", monotonically_increasing_id())
+    
+    for i in range(1, len(res)):
+        df2 = res[i].limit(1).select(column_lst[i]).withColumn("temp_name_monotonically_increasing_id", monotonically_increasing_id())
+        df_mode = df_mode.join(df2, (df_mode.temp_name_monotonically_increasing_id == df2.temp_name_monotonically_increasing_id)).drop(df2.temp_name_monotonically_increasing_id)
+        
+    return df_mode.drop("temp_name_monotonically_increasing_id")
+
+
+
+
+
+spark = SparkSession.builder \
+                    .appName('SparkByExamples.com') \
+                    .getOrCreate()
+
+
+
+
+
+
+
+
+
+
+parquets=["/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_01.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_02.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_03.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_04.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_05.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_06.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_07.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_08.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_09.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_10.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_11.parquet",
+          "/FileStore/tables/yellow_tripdata_2018/yellow_tripdata_2018_12.parquet",]
+    
+data=[]
+for i in parquets:
+    d = spark.read.option("header","true").parquet(i,inferSchema=True)
+    data.append(d)
+    
+#Merge all the dataframes in list
+df_complete=unionAll(*data)
+print("Total Rows and Columns:",(df_complete.count(), len(df_complete.columns)))
+columns=df_complete.columns
+
+print("=============================================")
+
+#Null values
+print("Null values for every columns in DataFrame:")
+print("=============================================")
+for i in df_complete.columns:
+      print(i,df_complete.count()-(df_complete.na.drop(subset=i).count()))
+
+print("=============================================")
+
+
+#Mode values for the DataFrame
+mode_values=get_mode(df_complete)
+
+
+print("Mode value of each column")
+print("================================")
+for i in range(len(df_complete.columns)):
+    print(columns[i],":",mode_values.collect()[0][i])
+print("================================")
+print("Grouping by each column")
+print("================================")
+for i in df_complete.columns:
+    display(df_complete.groupBy(i).count())
+
+
+
+
+#date_format()
+date=df_complete.select(col("tpep_pickup_datetime"), 
+    date_format(col("tpep_pickup_datetime"), "MM-dd-yyyy").alias("date_format"), 
+     year(col("tpep_pickup_datetime")).alias("year"), 
+     month(col("tpep_pickup_datetime")).alias("month"), 
+     next_day(col("tpep_pickup_datetime"),"Sunday").alias("next_day"), 
+     weekofyear(col("tpep_pickup_datetime")).alias("weekofyear"),
+     dayofmonth(col("tpep_pickup_datetime")).alias("dayofmonth"),
+     lit("2018").alias("corr_year")
+                        
+  )
+
+date=date.withColumn("final_date",expr("make_date(corr_year,month,dayofmonth)"))
+date=date.withColumn('row_index', row_number().over(Window.orderBy(monotonically_increasing_id())))
+# date=date.withColumn("date_fomat",to_date(col("final_date"),"MM-dd-yyyy"))
+
+
+date.show()
+
+
+df_complete=df_complete.withColumn('row_index', row_number().over(Window.orderBy(monotonically_increasing_id())))
+df_complete= df_complete.join(date, on=["row_index"]).drop("row_index",'needed_date',
+ 'date_format',
+ 'year',
+ 'month',
+ 'next_day',
+ 'weekofyear',
+ 'dayofmonth',
+ 'corr_year')
+
+
+
+
+
+
+
